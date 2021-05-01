@@ -22,7 +22,7 @@ from scipy.stats import chi2_contingency
 from scipy.stats import ttest_ind
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, mean_squared_error, r2_score, roc_auc_score, roc_curve, confusion_matrix
+from sklearn.metrics import accuracy_score, mean_squared_error, r2_score, roc_auc_score, roc_curve, confusion_matrix, f1_score, auc
 from sklearn import linear_model
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -226,8 +226,6 @@ for age in ['[0-10)','[10-20)', '[20-30)','[30-40)','[40-50)','[50-60)','[60-70)
 
 plt.legend(prop={'size': 12}, title = 'Gender', loc=6, borderaxespad=30.)
 plt.show()
-
-
 
 pal = ['steelblue','grey','red']
 sns.countplot(x='readmitted', data=data, palette=pal, alpha=0.7)
@@ -607,21 +605,10 @@ scores_length_l1_100_reg = cross_val_score(regr_l1_100, X_train_std, y_train, cv
 #The mean score and the standard deviation are hence given by:
 print("%0.2f (alpha = 100) accuracy with a standard deviation of %0.2f" % (scores_length_l1_100_reg.mean(), scores_length_l1_100_reg.std()))
 
-"""# Modeling: 30-Day Readmissions"""
+"""# Modeling: 30-Day Readmissions
 
-# For 30-day readmission, we will use logistic regression, gradient boosting, and random forest classifiers.
-# Process
-
-# Standardize features
-# Compute mean and stdev on training set for standardization
-
-# Logistic regression
-
-# Covalidation score
-
-# Gradient boosting
-
-"""## Logistic Regression with L1 Regularization"""
+## Logistic Regression with L1 Regularization
+"""
 
 # Set parameters
 n_folds = 5
@@ -650,12 +637,43 @@ coef_df['OR'] = np.exp(coef_df['Coefficient'])
 
 
 # Display Features with Odds Ratios
-coef_df[coef_df['Abs Coef']>0.1].sort_values('Abs Coef', ascending=False)[['Variable','Coefficient','OR']]
+coef_df[coef_df['Abs Coef']>0.001].sort_values('Abs Coef', ascending=False)[['Variable','Coefficient','OR']]
 
-valid_preds = pd.Series(lrcv_clf.predict_proba(X_valid_std)[:,1])
+valid_preds = pd.Series(lrcv_l1_clf.predict_proba(X_valid_std)[:,1])
 valid_preds = valid_preds.values
 valid_preds = np.array([valid_preds,valid_preds]).T
 roc_plot(y_valid,valid_preds)
+print('AUC: ',roc_auc_score(y_valid, valid_preds[:,1]))
+
+# Performance with Varying Training Sample Size Proportion
+
+sample_size = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.8, 0.9, 1] 
+auc_list = []
+for size in sample_size:
+  n_folds = 5
+  C_values = [0.001,0.01,1]
+  
+  # Fit model
+  lrcv_l1_clf = LogisticRegressionCV(Cs=C_values, cv=n_folds, penalty='l1', 
+                                     refit=False, scoring='roc_auc', max_iter=50,
+                                     solver='liblinear', random_state=42,
+                                     fit_intercept=False, n_jobs=-1)
+  n = int(size*len(y_train))
+  X_train_sample = X_train_std.head(n)
+  y_train_sample = y_train.head(n)
+  lrcv_l1_clf.fit(X_train_sample, y_train_sample.values.ravel())
+
+  valid_preds = pd.Series(lrcv_l1_clf.predict_proba(X_valid_std)[:,1])
+  valid_preds = valid_preds.values
+  valid_preds = np.array([valid_preds,valid_preds]).T
+  auc = roc_auc_score(y_valid, valid_preds[:,1])
+  auc_list.append(auc)
+
+plt.plot(sample_size, auc_list)
+plt.title('AUC by Training Sample Size')
+plt.xlabel('Sample Proportion')
+plt.ylabel('AUC')
+plt.show()
 
 """## Logistic Regression with L2 Regularization"""
 
@@ -688,10 +706,11 @@ coef_df['OR'] = np.exp(coef_df['Coefficient'])
 # Display Features with Odds Ratios
 coef_df.sort_values('Abs Coef', ascending=False)[['Variable','Coefficient','OR']][0:25]
 
-valid_preds = pd.Series(lrcv_l2_clf.predict_proba(X_valid_std)[:,1])
+valid_preds = pd.Series(lrcv_l2_clf.predict_proba(X_valid)[:,1])
 valid_preds = valid_preds.values
 valid_preds = np.array([valid_preds,valid_preds]).T
 roc_plot(y_valid,valid_preds)
+print('Validation AUC: ',roc_auc_score(y_valid, valid_preds[:,1]))
 
 """## Random Forest"""
 
@@ -720,10 +739,22 @@ print("Feature ranking:")
 for f in range(X_train.shape[1]):
   print("%d. feature %s (%f)" % (f + 1, X_train.columns[indices[f]], importances[indices[f]]))
 
+train_preds = pd.Series(CV_rfc.predict_proba(X_train)[:,1])
+train_preds = train_preds.values
+train_preds = np.array([train_preds,train_preds]).T
+
 valid_preds = pd.Series(CV_rfc.predict_proba(X_valid)[:,1])
 valid_preds = valid_preds.values
 valid_preds = np.array([valid_preds,valid_preds]).T
 roc_plot(y_valid,valid_preds)
+
+print('Training AUC: ',roc_auc_score(y_train, train_preds[:,1]))
+print('Validation AUC: ',roc_auc_score(y_valid, valid_preds[:,1]))
+
+train_prediction = train_preds[:,1] >= 0.08
+valid_prediction = valid_preds[:,1] >= 0.08
+print('Training F1: ',f1_score(y_train,train_prediction))
+print('Validation F1: ',f1_score(y_valid,valid_prediction))
 
 """## Gradient Boosting Classifier"""
 
@@ -751,26 +782,136 @@ print("Feature ranking:")
 for f in range(X_train.shape[1]):
   print("%d. feature %s (%f)" % (f + 1, X_train.columns[indices[f]], importances[indices[f]]))
 
+train_preds = pd.Series(CV_gbc.predict_proba(X_train)[:,1])
+train_preds = train_preds.values
+train_preds = np.array([train_preds,train_preds]).T
+
 valid_preds = pd.Series(CV_gbc.predict_proba(X_valid)[:,1])
 valid_preds = valid_preds.values
 valid_preds = np.array([valid_preds,valid_preds]).T
 roc_plot(y_valid,valid_preds)
 
-# Analysis and Evaluation 
+print('Training AUC: ',roc_auc_score(y_train, train_preds[:,1]))
+print('Validation AUC: ',roc_auc_score(y_valid, valid_preds[:,1]))
 
-# Do cross validation in every algorithm
+"""# Model Evaluation"""
 
-# Evaluation metrics 
+test_preds = pd.Series(lrcv_l1_clf.predict_proba(X_test)[:,1])
+test_preds = test_preds.values
+test_preds = np.array([test_preds,test_preds]).T
+roc_plot(y_test,test_preds)
 
-# Feature importance
+metrics_list = []
 
-# Training/ Inference/ Time/ Cost
+res = {}
+prediction = test_preds[:,1] >= 0.51
 
-# Comparison to other models
+accuracy = accuracy_score(y_test,prediction)
+cm = confusion_matrix(y_test,prediction)
 
-# Least confident examples
+res['Confusion Matrix'] = cm
+res['Accuracy'] = accuracy
+res['F1 score'] = f1_score(y_test,prediction)
+res['FPR'] = cm[0,1]/(cm[0,:].sum()*1.0)
+res['FNR'] = cm[1,0]/(cm[1,:].sum()*1.0)
+res['Specificity (TNR)'] = cm[0,0]/(cm[0,:].sum()*1.0)
+res['Sensitivity (TPR, Recall)'] = cm[1,1]/(cm[1,:].sum()*1.0)
+res['PPV (Precision)'] = cm[1,1]/(cm[:,1].sum()*1.0)
+res['NPV'] = cm[0,0]/(cm[:,0].sum()*1.0)
 
-# Bias/ Variance trade-off
+metrics_list.append(res)
+
+print('Final Test AUC: ',roc_auc_score(y_test, test_preds[:,1]))
+pd.DataFrame(metrics_list)
+
+# Plot metrics including Precision, Recall, and Specificity against a range of thresholds
+with np.errstate(divide='ignore', invalid='ignore'):
+
+  ms = []
+  thresholds = np.linspace(0,test_preds.max(),400)
+  for thresh in thresholds:
+      res = {}
+      prediction = test_preds[:,1] > thresh
+
+      accuracy = accuracy_score(y_test,prediction)
+      cm = confusion_matrix(y_test,prediction)
+
+      res['confusion_matrix'] = cm
+      res['Accuracy'] = accuracy
+      res['F1 score'] = f1_score(y_test,prediction)
+      res['FPR'] = cm[0,1]/(cm[0,:].sum()*1.0)
+      res['FNR'] = cm[1,0]/(cm[1,:].sum()*1.0)
+      res['Specificity (TNR)'] = cm[0,0]/(cm[0,:].sum()*1.0)
+      res['Sensitivity (TPR, Recall)'] = cm[1,1]/(cm[1,:].sum()*1.0)
+      res['PPV (Precision)'] = cm[1,1]/(cm[:,1].sum()*1.0)
+      res['NPV'] = cm[0,0]/(cm[:,0].sum()*1.0)
+      ms.append(res)
+  ms_df = pd.DataFrame(ms)
+
+fig, ax = plt.subplots(1,1,figsize=(12,12))
+for metric in ['F1 score','NPV','PPV (Precision)','Sensitivity (TPR, Recall)','Specificity (TNR)']:
+    plt.plot(thresholds,ms_df[metric],'-',label=metric)
+ax.legend(loc=0)
+ax.set_xlabel('Model Threshold')
+ax.set_ylabel('Metric Value')
+ax.set_title('Model Performance Metrics')
+plt.show()
+
+"""# Comparison Across Subgroups"""
+
+# Add Predictions to test data
+test_review = test.copy()
+test_review['pred'] = list(test_preds[:,1])
+test_review['pred_yn'] = np.where(test_review.pred >= 0.51, 1, 0)                                          
+
+test_review.head()
+
+# Calculate metrics at the patient-visit level
+test_review['Accurate_YN'] = np.where((test_review.pred_yn == test_review.readmit_yn),1,0)
+test_review['TP'] = np.where((test_review.pred_yn == 1) & (test_review.readmit_yn == 1),1,0)
+test_review['FP'] = np.where((test_review.pred_yn == 1) & (test_review.readmit_yn == 0),1,0)
+test_review['FN'] = np.where((test_review.pred_yn == 0) & (test_review.readmit_yn == 1),1,0)
+test_review['TN'] = np.where((test_review.pred_yn == 0) & (test_review.readmit_yn == 0),1,0)
+# test_review.head()
+
+from sklearn import metrics
+def auc_group(df):
+    y_hat = df.pred
+    y = df.readmit_yn.values
+    fpr, tpr, thresholds = roc_curve(y, y_hat)
+    auc_score = metrics.auc(fpr, tpr)
+    return auc_score
+
+cols = ['race','gender','age']
+
+all_groups_df = pd.DataFrame(columns=['Category','Subgroup','Observed Readmission Rate','Predicted Readmission Rate','Accuracy','AUC','PPV','Recall','FPR'])
+
+for col in cols:
+    rates = test_review.groupby(col).agg({'readmit_yn':'mean',
+                                          'pred_yn':'mean',
+                                          'Accurate_YN':'mean',
+                                          'TP':'sum',
+                                          'FP':'sum',
+                                          'FN':'sum',
+                                          'TN':'sum'
+                                      }).reset_index()
+    
+    auc = test_review.groupby(col).apply(auc_group).reset_index(name='AUC')
+    
+    metrics_df = auc.merge(rates, left_on=col, right_on=col)
+    
+    metrics_df['Category'] = col
+    metrics_df['Subgroup'] = auc[col]
+    metrics_df['PPV'] = metrics_df.TP/(metrics_df.TP + metrics_df.FP)
+    metrics_df['Recall'] = metrics_df.TP/(metrics_df.TP + metrics_df.FN)
+    metrics_df['FPR'] = metrics_df.FP/(metrics_df.FP + metrics_df.FN)
+
+    metrics_df.rename(columns={'readmit_yn':'Observed Readmission Rate','pred_yn':'Predicted Readmission Rate','Accurate_YN':'Accuracy'},inplace=True)
+
+    metrics_df = metrics_df[['Category','Subgroup','Observed Readmission Rate','Predicted Readmission Rate','Accuracy','AUC','PPV','Recall','FPR']]
+    all_groups_df = pd.concat([all_groups_df,metrics_df], ignore_index=True, axis=0)
+
+all_groups_df
 
 """NOTES:
 
